@@ -181,6 +181,45 @@
 
   @keyframes poisonFlash { 0%,100%{background:transparent} 50%{background:rgba(160,32,240,.25)} }
   .poison-flash { animation:poisonFlash .4s ease; }
+
+  /* ===== MUERTE / REVIVE ===== */
+  #dead-overlay {
+    display:none; position:absolute; inset:0; z-index:25;
+    background:rgba(0,0,0,0.72);
+    backdrop-filter:grayscale(1) brightness(0.5);
+    -webkit-backdrop-filter:grayscale(1) brightness(0.5);
+    flex-direction:column; align-items:center; justify-content:center; gap:12px;
+  }
+  #dead-overlay.active { display:flex; }
+  #dead-overlay .dead-label {
+    font-family:var(--display); font-size:clamp(1.8rem,8vw,3rem);
+    letter-spacing:.15em; color:var(--red);
+    text-shadow:0 0 30px rgba(255,45,45,.6);
+  }
+  #dead-overlay .dead-sub {
+    font-size:.6rem; letter-spacing:.3em; color:rgba(255,255,255,.45);
+  }
+  /* Barra de progreso de revive encima de un jugador remoto */
+  .revive-bar-wrap {
+    position:absolute; height:5px; width:32px;
+    background:#1a1a2a; border:1px solid rgba(0,229,255,.4);
+    pointer-events:none; z-index:15;
+  }
+  .revive-bar-fill {
+    height:100%; width:0%; background:var(--cyan);
+    transition:width 5s linear;
+  }
+  /* Botón médico (solo multiplayer) */
+  #btn-medic {
+    display:none; position:absolute; top:64px; right:10px; z-index:15;
+    background:rgba(0,229,255,.12); border:1px solid rgba(0,229,255,.5);
+    color:var(--cyan); font-family:var(--mono); font-size:.55rem;
+    letter-spacing:.15em; padding:8px 12px; cursor:pointer;
+    flex-direction:column; align-items:center; gap:3px;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #btn-medic.visible { display:flex; }
+  #btn-medic:active { filter:brightness(1.4); }
   
   /* ===== MULTIJUGADOR ===== */
   #screen-multiplayer {
@@ -234,11 +273,6 @@
         <div class="class-desc">+10% velocidad de disparo. Más balas, más rápido.</div>
         <div class="class-badge badge-available">ACTIVO</div>
       </div>
-      <div class="class-card unavailable" data-class="medic">
-        <div class="class-name">✚ MÉDICO</div>
-        <div class="class-desc">Revive aliados a distancia sin necesidad de contacto.</div>
-        <div class="class-badge badge-unavailable">PRÓXIMO</div>
-      </div>
       <div class="class-card" data-class="berserker" onclick="selectClass(this)">
         <div class="class-name">⚡ BERSERKER</div>
         <div class="class-desc">+15% vida máxima. Más carne entre tú y la muerte.</div>
@@ -261,6 +295,24 @@
     <div class="game-logo">ZONE<span>ZERO</span></div>
     <div class="logo-sub">Multiplayer Protocol</div>
     <div class="menu-divider"></div>
+    <div class="menu-section-title">ELIGE TU CLASE</div>
+    <div class="class-grid">
+      <div class="class-card" data-class="scavenger" onclick="selectMpClass(this)">
+        <div class="class-name">☠ CARROÑERO</div>
+        <div class="class-desc">+10% velocidad de disparo.</div>
+        <div class="class-badge badge-available">ACTIVO</div>
+      </div>
+      <div class="class-card" data-class="berserker" onclick="selectMpClass(this)">
+        <div class="class-name">⚡ BERSERKER</div>
+        <div class="class-desc">+15% vida máxima.</div>
+        <div class="class-badge badge-available">ACTIVO</div>
+      </div>
+      <div class="class-card" data-class="medic" onclick="selectMpClass(this)">
+        <div class="class-name">✚ MÉDICO</div>
+        <div class="class-desc">Revive aliados caídos. Solo multijugador.</div>
+        <div class="class-badge badge-available" style="border-color:var(--cyan);color:var(--cyan)">MP ONLY</div>
+      </div>
+    </div>
     <div class="menu-section-title">ESCUADRA</div>
     <div class="class-card selected">
       <div class="class-name" id="squadName">WH199</div>
@@ -333,6 +385,19 @@
   <div id="effect-banner"></div>
   <div id="speed-indicator">▲ VELOCIDAD +20%</div>
 
+  <!-- Overlay de muerte (multijugador) -->
+  <div id="dead-overlay">
+    <div class="dead-label">CAÍDO</div>
+    <div class="dead-sub">ESPERA A QUE UN COMPAÑERO TE REVIVA</div>
+  </div>
+
+  <!-- Botón médico (solo aparece en MP cuando hay alguien caído) -->
+  <button id="btn-medic"
+    ontouchstart="actionMedic(event)" onmousedown="actionMedic(event)">
+    <span style="font-size:1.2rem">✚</span>
+    <span>REVIVIR</span>
+  </button>
+
   <canvas id="gameCanvas"></canvas>
 
   <div id="controls">
@@ -389,11 +454,12 @@
 //  ZONE ZERO — Engine v0.2
 // ==============================================
 
-let selectedClass = null;
-let gameState     = null;
-let animFrame     = null;
-let currentRoom   = null;
-let socket        = null;
+let selectedClass   = null;
+let selectedMpClass = null;   // clase elegida en menú multiplayer (incluye medic)
+let gameState       = null;
+let animFrame       = null;
+let currentRoom     = null;
+let socket          = null;
 
 if (typeof io !== 'undefined') {
   socket = io('https://zonezero-server.onrender.com', {
@@ -525,12 +591,20 @@ window.addEventListener('resize', () => {
 // ==============================================
 function selectClass(card) {
   if (card.classList.contains('unavailable')) return;
-  document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
+  // Solo afecta cards dentro del menú singleplayer
+  document.querySelectorAll('#screen-menu .class-card').forEach(c => c.classList.remove('selected'));
   card.classList.add('selected');
   selectedClass = card.dataset.class;
   const btn = document.getElementById('btn-start');
   btn.disabled = false;
   btn.textContent = 'INICIAR';
+}
+
+// Selección de clase en menú multiplayer (incluye medic)
+function selectMpClass(card) {
+  document.querySelectorAll('#screen-multiplayer .class-card[data-class]').forEach(c => c.classList.remove('selected'));
+  card.classList.add('selected');
+  selectedMpClass = card.dataset.class;
 }
 
 // ==============================================
@@ -783,7 +857,13 @@ function updateInjectUI() {
 function gameLoop() {
   animFrame = requestAnimationFrame(gameLoop);
   const gs = gameState;
-  if (!gs || !gs.player || !gs.player.alive) return;
+  if (!gs || !gs.player) return;
+
+  // Si el jugador local está muerto en modo MP: solo renderizar
+  if (!gs.player.alive) {
+    if (currentRoom) { draw(); }
+    return;
+  }
 
   gs.now = performance.now();
 
@@ -1003,36 +1083,74 @@ function draw() {
 
   // ── Jugadores remotos ───────────────────────
   for (const rp of Object.values(gs.remotePlayers)) {
-    if (!rp.alive) continue;
     const rw = 20, rh = 20;
+    const cx = rp.x + rw/2;
+    const cy = rp.y + rh/2;
+
+    if (!rp.alive) {
+      // Jugador caído: silueta gris
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = '#555566';
+      ctx.fillRect(rp.x, rp.y, rw, rh);
+      ctx.globalAlpha = 1;
+      // Icono caído
+      ctx.fillStyle = 'rgba(255,45,45,0.8)';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('✖', cx, cy + 4);
+      ctx.textAlign = 'left';
+
+      // Barra de progreso si se está reviviendo
+      if (rp.reviving) {
+        const bw = 28, bh = 5;
+        const bx = cx - bw/2, by = rp.y - 14;
+        ctx.fillStyle = '#1a1a2a';
+        ctx.fillRect(bx, by, bw, bh);
+        // La barra empieza vacía y se llena — se maneja con CSS transition en el DOM
+        // Aquí dibujamos una versión canvas animada simple
+        if (!rp._reviveStart) rp._reviveStart = performance.now();
+        const elapsed = (performance.now() - rp._reviveStart) / 5000;
+        const pct = Math.min(elapsed, 1);
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillRect(bx, by, bw * pct, bh);
+        // Texto reviviendo
+        ctx.fillStyle = 'rgba(0,229,255,0.9)';
+        ctx.font = '6px Share Tech Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('REVIVIENDO...', cx, rp.y - 17);
+        ctx.textAlign = 'left';
+      } else {
+        rp._reviveStart = null;
+      }
+      continue;
+    }
+
+    // Jugador remoto vivo
     ctx.save();
-    ctx.translate(rp.x + rw/2, rp.y + rh/2);
+    ctx.translate(cx, cy);
     ctx.shadowBlur = 12;
     ctx.shadowColor = '#00e5ff';
     ctx.fillStyle = '#00e5ff';
     ctx.fillRect(-rw/2, -rh/2, rw, rh);
     ctx.shadowBlur = 0;
-    // punta de dirección
     ctx.fillStyle = '#003344';
     const rtx = Math.cos(rp.angle) * (rw/2 - 1);
     const rty = Math.sin(rp.angle) * (rh/2 - 1);
     ctx.fillRect(rtx-3, rty-3, 6, 6);
     ctx.restore();
-    // barra de HP remoto
+    // Barra de HP
     if (rp.maxHp > 0) {
-      const barW = 24;
-      const barX = rp.x + rw/2 - barW/2;
-      const barY = rp.y - 7;
+      const barW = 24, barX = cx - 12, barY = rp.y - 7;
       ctx.fillStyle = '#1a1a2a';
       ctx.fillRect(barX, barY, barW, 3);
       ctx.fillStyle = '#00e5ff';
       ctx.fillRect(barX, barY, (rp.hp / rp.maxHp) * barW, 3);
     }
-    // etiqueta
+    // Etiqueta ID
     ctx.fillStyle = 'rgba(0,229,255,0.7)';
     ctx.font = '7px Share Tech Mono, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(rp.id.slice(0, 4).toUpperCase(), rp.x + rw/2, rp.y - 10);
+    ctx.fillText(rp.id.slice(0, 4).toUpperCase(), cx, rp.y - 10);
     ctx.textAlign = 'left';
   }
 
@@ -1260,6 +1378,12 @@ function moveJoystick(cx, cy, ox, oy) {
   joystickThumb.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
 
   if (gameState) gameState.moveDir = { x: nx, y: ny };
+
+  // Si el médico se mueve mientras revive, cancelar el revive
+  if (socket && currentRoom && gameState && gameState._revivingTarget && dist > 8) {
+    socket.emit("cancelRevive", { room: currentRoom, targetId: gameState._revivingTarget });
+    gameState._revivingTarget = null;
+  }
 }
 
 // ==============================================
@@ -1289,6 +1413,49 @@ function stopShoot(e) {
   if (gameState) gameState.shooting = false;
 }
 function actionKnife(e)  { if (e) e.preventDefault(); unlockAudio(); if (gameState) knifeAttack(); }
+
+// Botón médico: revivir al aliado caído más cercano
+function actionMedic(e) {
+  if (e) e.preventDefault();
+  if (!gameState || !socket || !currentRoom) return;
+  if (!gameState.player.alive) return;
+  if (selectedMpClass !== 'medic') return;
+
+  // Buscar jugador remoto caído más cercano
+  const p = gameState.player;
+  let nearest = null, nearestDist = Infinity;
+  for (const rp of Object.values(gameState.remotePlayers)) {
+    if (rp.alive) continue;
+    const dist = Math.hypot((rp.x + 10) - (p.x + p.w/2), (rp.y + 10) - (p.y + p.h/2));
+    if (dist < nearestDist) { nearestDist = dist; nearest = rp; }
+  }
+  if (!nearest) return;
+
+  socket.emit("startRevive", { room: currentRoom, targetId: nearest.id });
+  gameState._revivingTarget = nearest.id;
+}
+
+function showMedButton()  { document.getElementById('btn-medic').classList.add('visible'); }
+function hideMedButton()  { document.getElementById('btn-medic').classList.remove('visible'); }
+
+function setLocalPlayerDead() {
+  if (!gameState) return;
+  gameState.player.alive = false;
+  gameState.shooting     = false;
+  document.getElementById('dead-overlay').classList.add('active');
+  document.getElementById('controls').style.opacity = '0.3';
+  document.getElementById('controls').style.pointerEvents = 'none';
+}
+
+function setLocalPlayerAlive(hp) {
+  if (!gameState) return;
+  gameState.player.alive = true;
+  gameState.player.hp    = hp;
+  updateHPBar();
+  document.getElementById('dead-overlay').classList.remove('active');
+  document.getElementById('controls').style.opacity  = '';
+  document.getElementById('controls').style.pointerEvents = '';
+}
 
 document.getElementById('controls').addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
@@ -1322,7 +1489,8 @@ function gameOver() {
 function backToMenu() {
   cancelAnimationFrame(animFrame);
   stopAmbient();
-  gameState = null; selectedClass = null;
+  gameState = null; selectedClass = null; selectedMpClass = null;
+  currentRoom = null;
   document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
   const btn = document.getElementById('btn-start');
   btn.disabled = true; btn.textContent = 'SELECCIONA UNA CLASE';
@@ -1332,6 +1500,10 @@ function backToMenu() {
   document.getElementById('poison-bar-wrap').style.display = 'none';
   document.getElementById('speed-indicator').classList.remove('active');
   document.getElementById('effect-banner').classList.remove('show');
+  document.getElementById('dead-overlay').classList.remove('active');
+  document.getElementById('controls').style.opacity = '';
+  document.getElementById('controls').style.pointerEvents = '';
+  hideMedButton();
   showScreen('screen-menu');
 }
 
@@ -1361,13 +1533,14 @@ function createSquad() {
   const nombre = document.getElementById('squadName').textContent;
   if (!nombre) return;
 
+  const cls = selectedMpClass ?? 'scavenger';
   currentRoom = nombre;
 
   if (socket) {
-    const hp     = selectedClass === 'berserker' ? Math.round(100 * 1.15) : 100;
+    const hp = cls === 'berserker' ? Math.round(100 * 1.15) : 100;
     socket.emit("joinRoom", {
       room:        nombre,
-      playerClass: selectedClass ?? 'scavenger',
+      playerClass: cls,
       hp,
       maxHp: hp
     });
@@ -1384,13 +1557,14 @@ function joinSquad() {
     return;
   }
 
+  const cls = selectedMpClass ?? 'scavenger';
   currentRoom = codigo;
 
   if (socket) {
-    const hp = selectedClass === 'berserker' ? Math.round(100 * 1.15) : 100;
+    const hp = cls === 'berserker' ? Math.round(100 * 1.15) : 100;
     socket.emit("joinRoom", {
       room:        codigo,
-      playerClass: selectedClass ?? 'scavenger',
+      playerClass: cls,
       hp,
       maxHp: hp
     });
@@ -1405,7 +1579,7 @@ if (socket) {
   socket.on("roomData", ({ players }) => {
     if (!gameState) return;
     for (const [id, data] of Object.entries(players)) {
-      if (id === socket.id) continue; // no registrarse a sí mismo
+      if (id === socket.id) continue;
       gameState.remotePlayers[id] = { ...data, w: 20, h: 20 };
     }
     const count = Object.keys(players).length;
@@ -1438,6 +1612,56 @@ if (socket) {
     if (!gameState || !gameState.remotePlayers[id]) return;
     gameState.remotePlayers[id].hp    = hp;
     gameState.remotePlayers[id].alive = alive;
+  });
+
+  // ── SISTEMA DE MUERTE ─────────────────────────
+  // Jugador caído (puede ser yo mismo o un remoto)
+  socket.on("playerDown", ({ id }) => {
+    if (!gameState) return;
+    if (socket && id === socket.id) {
+      // Soy yo quien cayó
+      setLocalPlayerDead();
+    } else if (gameState.remotePlayers[id]) {
+      gameState.remotePlayers[id].alive    = false;
+      gameState.remotePlayers[id].hp       = 0;
+      gameState.remotePlayers[id].reviving = false;
+    }
+  });
+
+  // Revive completado
+  socket.on("playerRevived", ({ id, hp }) => {
+    if (!gameState) return;
+    if (socket && id === socket.id) {
+      setLocalPlayerAlive(hp);
+    } else if (gameState.remotePlayers[id]) {
+      gameState.remotePlayers[id].alive    = true;
+      gameState.remotePlayers[id].hp       = hp;
+      gameState.remotePlayers[id].reviving = false;
+    }
+  });
+
+  // Revive iniciado sobre alguien
+  socket.on("reviveStarted", ({ targetId }) => {
+    if (!gameState) return;
+    if (gameState.remotePlayers[targetId]) {
+      gameState.remotePlayers[targetId].reviving = true;
+    }
+  });
+
+  // Revive cancelado
+  socket.on("reviveCancelled", ({ targetId }) => {
+    if (!gameState) return;
+    if (gameState.remotePlayers[targetId]) {
+      gameState.remotePlayers[targetId].reviving = false;
+    }
+  });
+
+  // Conteo de jugadores caídos en la sala (para mostrar/ocultar botón médico)
+  socket.on("downedPlayersCount", (count) => {
+    if (selectedMpClass === 'medic' && gameState && gameState.player.alive) {
+      if (count > 0) showMedButton();
+      else hideMedButton();
+    }
   });
 
   // Otro jugador se desconectó
