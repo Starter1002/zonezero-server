@@ -31,7 +31,7 @@ function removePlayerFromRooms(socketId) {
       if (Object.keys(room.players).length === 0) {
         delete rooms[roomId];
       }
-      break;
+      // continúa iterando para cubrir el caso de múltiples salas
     }
   }
 }
@@ -73,8 +73,9 @@ io.on("connection", (socket) => {
 
   // ── playerMove ───────────────────────────────
   socket.on("playerMove", ({ room, x, y, angle }) => {
+    if (!room || !rooms[room]) return;
     const roomState = rooms[room];
-    if (!roomState || !roomState.players[socket.id]) return;
+    if (!roomState.players[socket.id]) return;
 
     roomState.players[socket.id].x     = x;
     roomState.players[socket.id].y     = y;
@@ -99,17 +100,18 @@ io.on("connection", (socket) => {
   });
 
   // ── playerHit ────────────────────────────────
-  socket.on("playerHit", ({ room, hp }) => {
+  // targetId: socket.id del jugador que recibió el daño (enviado por el cliente que detectó el impacto)
+  socket.on("playerHit", ({ room, targetId, hp }) => {
     const roomState = rooms[room];
-    if (!roomState || !roomState.players[socket.id]) return;
+    if (!roomState || !targetId || !roomState.players[targetId]) return;
 
-    roomState.players[socket.id].hp = hp;
-    if (hp <= 0) roomState.players[socket.id].alive = false;
+    roomState.players[targetId].hp = hp;
+    if (hp <= 0) roomState.players[targetId].alive = false;
 
     io.to(room).emit("playerHitUpdate", {
-      id: socket.id,
+      id:    targetId,
       hp,
-      alive: roomState.players[socket.id].alive
+      alive: roomState.players[targetId].alive
     });
   });
 
